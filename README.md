@@ -1,142 +1,176 @@
 # gpx2engraving
 
-Transforme une trace GPX en **SVG propre, prêt à graver au laser** (LightBurn) :
-titre, trace sur courbes de niveau, plans d'eau, profil altimétrique, distance, D+, date.
+Turn a GPX track into a **clean, laser-ready SVG** for LightBurn: a title, the track drawn over
+contour lines, nearby lakes, the elevation profile, distance, elevation gain and date.
+Everything is vector, text is converted to paths, units are millimetres, and every kind of element
+sits in its own colour so LightBurn puts it on its own layer.
 
-*Turns a GPX track into a clean, laser-ready SVG (LightBurn): title, track over contour lines,
-lakes, elevation profile, distance, elevation gain and date. French IGN data (RGE ALTI 5 m DEM,
-BD TOPO water bodies), text converted to paths, millimetre units.*
-
-| Portrait (auto) | Carré | Paysage |
+| Portrait (auto) | Square | Landscape |
 |---|---|---|
-| ![portrait](exemples/ayguelongue_apercu.png) | ![carré](exemples/ayguelongue_carre_apercu.png) | ![paysage](exemples/ayguelongue_paysage_apercu.png) |
+| ![portrait](examples/ayguelongue_preview.png) | ![square](examples/ayguelongue_square_preview.png) | ![landscape](examples/ayguelongue_landscape_preview.png) |
 
-Les trois planches ci-dessus sortent de la même commande, seule l'option `--format` change.
+The three plates above come from the same GPX file; only the options differ.
+The PNG preview shows the plate as it will look once engraved; the SVG itself uses one colour per layer.
 
-## Ce que fait le script
+## What it does
 
-1. Lit le GPX (traces ou itinéraires, plusieurs segments acceptés) et le projette en Lambert-93.
-2. Calcule la distance, le D+ (altitude lissée + seuil d'hystérésis), la date et la durée.
-3. Choisit la forme de la planche (carré, portrait ou paysage) au plus serré autour de la trace, 20 cm maximum.
-4. Télécharge le MNT IGN **RGE ALTI 5 m** sur l'emprise (mis en cache), le lisse et génère les courbes de niveau, équidistance automatique.
-5. Récupère les plans d'eau IGN **BD TOPO** (ou OpenStreetMap) et les hachure.
-6. Nettoie tout pour le laser : découpe au cadre, simplification des tracés, suppression des micro-fragments, halo vide autour de la trace.
-7. Vectorise les textes (titre, statistiques, étiquettes) : aucune police n'est nécessaire côté laser.
-8. Écrit un SVG en millimètres, un calque par couleur LightBurn, plus un aperçu PNG.
+1. Reads the GPX (tracks or routes, several segments allowed) and projects it to Lambert-93.
+2. Computes distance, elevation gain (smoothed elevation plus a hysteresis threshold), date and duration.
+3. Picks the plate shape (square, portrait or landscape) as tight as possible around the track, 20 cm max by default.
+4. Downloads the IGN **RGE ALTI 5 m** digital elevation model over the extent (cached locally), smooths it
+   and generates contour lines with an automatic interval.
+5. Fetches water bodies from the IGN **BD TOPO** (or OpenStreetMap) as filled polygons.
+6. Cleans everything for the laser: clips to the frame, simplifies paths, removes tiny fragments,
+   keeps an empty halo around the track so it stands out from the contours.
+7. Converts all text (title, statistics, labels) to paths: no font is needed on the laser side.
+8. Writes an SVG in millimetres with one layer per colour, plus a PNG preview.
 
-## Prérequis
+## Requirements
 
-- **Windows + QGIS** (3.28 ou plus récent). Le script s'exécute avec le Python livré avec QGIS, qui fournit
-  déjà GDAL, numpy, shapely, pyproj, scipy, matplotlib et fontTools. Rien d'autre à installer.
-- Une connexion internet pour le MNT et les lacs (les téléchargements sont mis en cache dans `cache/`).
-- Zone couverte : **France** (données IGN Géoplateforme, gratuites, sans clé).
+- **Windows with QGIS** (3.28 or newer). The script runs with the Python that ships with QGIS,
+  which already provides GDAL, numpy, shapely, pyproj, scipy, matplotlib and fontTools. Nothing else to install.
+- Internet access for the DEM and the lakes. Downloads are cached in `cache/`, so re-runs are offline.
+- Coverage: **France** (IGN Géoplateforme open data, no API key).
 
-Sans QGIS, un Python 3.10+ avec `numpy scipy shapely pyproj requests matplotlib fonttools` fonctionne aussi :
-`python gpx2engraving.py trace.gpx ...`
+### Without QGIS
 
-## Utilisation
+Any Python 3.10 or newer works with these packages:
 
-```bat
-gpx2engraving.bat trace.gpx --title "Étang d'Ayguelongue et pic de l'Homme"
+```bash
+pip install numpy scipy shapely pyproj requests matplotlib fonttools
+python gpx2engraving.py track.gpx --title "My hike"
 ```
 
-Produit `trace.svg` et `trace_apercu.png` à côté du GPX, et affiche un résumé JSON
-(planche, échelle, distance, D+, altitudes, lacs trouvés).
+On Windows, set `GPX2ENGRAVING_PYTHON` to that `python.exe` and the `.bat` launcher will use it.
 
-Sans `--title`, le nom de la trace contenu dans le GPX est utilisé.
+## Installation
 
-### Exemples
-
-```bat
-:: Planche carrée, durée affichée, aire sous le profil remplie
-gpx2engraving.bat trace.gpx -t "Pic de Cagire" --format square --show-duration --profile-fill
-
-:: Paysage, trace en ligne fine plutôt qu'en remplissage, lacs OpenStreetMap
-gpx2engraving.bat trace.gpx -t "Lac d'Oô" --format landscape --track-style line --water osm
-
-:: Équidistance forcée à 20 m, planche de 15 cm max, sans date
-gpx2engraving.bat trace.gpx -t "Néouvielle" --interval 20 --max-size 150 --no-date
-
-:: Lot : toutes les traces d'un dossier, titre = nom de la trace
-for %f in (C:\rando\*.gpx) do gpx2engraving.bat "%f"
+```bash
+git clone https://github.com/YannickRiou/gpx2engraving.git
+cd gpx2engraving
+gpx2engraving.bat examples\ayguelongue.gpx --title "Étang d'Ayguelongue et pic de l'Homme"
 ```
 
-Une trace d'exemple est fournie : `exemples/ayguelongue.gpx`.
+The launcher looks for QGIS in `C:\Program Files\QGIS 3*` and `C:\OSGeo4W`. The first run downloads
+about 2 MB of elevation data for a typical day hike and takes a few seconds.
 
-### Options principales
+## Usage
 
-| Option | Défaut | Effet |
+```bat
+gpx2engraving.bat track.gpx --title "My hike"
+```
+
+This writes `track.svg` and `track_preview.png` next to the GPX file and prints a JSON summary
+(plate size, scale, distance, ascent, elevations, lakes found).
+
+Without `--title`, the track name stored in the GPX is used.
+
+### Overriding the values
+
+Everything engraved on the plate can be forced from the command line, which is handy when your
+watch or app reports different numbers than the GPX:
+
+```bat
+gpx2engraving.bat track.gpx --title "Pic de Cagire" --distance 12.4 --ascent 1150 --date "14 July 2026" --duration "5 h 30"
+```
+
+`--distance` (km) also rescales the profile's distance axis so the labels stay consistent.
+
+### More examples
+
+```bat
+:: Square plate, French text, duration shown, filled area under the profile
+gpx2engraving.bat track.gpx -t "Pic de Cagire" --format square --lang fr --show-duration --profile-fill
+
+:: Landscape, track as a thin centre line instead of a filled polygon, lakes from OpenStreetMap
+gpx2engraving.bat track.gpx -t "Lac d'Oô" --format landscape --track-style line --water osm
+
+:: Fixed 20 m contour interval, 15 cm plate, no date
+gpx2engraving.bat track.gpx -t "Néouvielle" --interval 20 --max-size 150 --no-date
+
+:: Batch: every GPX in a folder, title taken from each file
+for %f in (C:\hikes\*.gpx) do gpx2engraving.bat "%f"
+```
+
+A sample track is provided in `examples/ayguelongue.gpx`.
+
+### Main options
+
+| Option | Default | Effect |
 |---|---|---|
-| `--title`, `-t` | nom GPX | titre gravé |
-| `--out`, `-o` | à côté du GPX | fichier SVG de sortie |
+| `--title`, `-t` | GPX name | engraved title |
+| `--out`, `-o` | next to the GPX | output SVG file |
+| `--lang` | `en` | language of the engraved text (`en`, `fr`): date, decimal separator, "ascent" / "D+" |
 | `--format` | `auto` | `auto`, `square`, `portrait`, `landscape` |
-| `--max-size` | 200 | côté maximal de la planche (mm) |
-| `--margin` | 250 | marge de terrain minimale autour de la trace (m) |
-| `--interval` | auto | équidistance des courbes (m) ; auto vise `--target-lines` niveaux (40) |
-| `--index-every` | 5 | une courbe maîtresse toutes les N, dans un calque séparé (0 = aucune) |
-| `--smooth` | 1.2 | lissage gaussien du MNT (pixels) |
-| `--track-width` | 1.1 | largeur gravée de la trace (mm) |
-| `--track-style` | `fill` | `fill` (polygone rempli), `line` (axe), `both` |
-| `--halo` | 0.45 | vide autour de la trace pour la détacher des courbes (mm) |
+| `--max-size` | 200 | maximum plate side (mm) |
+| `--margin` | 250 | minimum terrain margin around the track (m) |
+| `--distance`, `--ascent`, `--date`, `--duration` | from GPX | force the displayed values |
+| `--show-duration` / `--show-moving` | off | add total duration / moving time |
+| `--no-date` | off | no date |
+| `--interval` | auto | contour interval (m); auto aims at `--target-lines` levels (40) |
+| `--index-every` | 5 | one index contour every N, in its own layer (0 = none) |
+| `--smooth` | 1.2 | gaussian smoothing of the DEM (pixels) |
+| `--track-width` | 1.1 | engraved track width (mm) |
+| `--track-style` | `fill` | `fill` (filled polygon), `line` (centre line), `both` |
+| `--halo` | 0.45 | empty halo around the track (mm) |
 | `--water` | `ign` | `ign`, `osm`, `none` |
-| `--water-hatch` | 0.9 | espacement des hachures des lacs (mm), 0 = contour seul |
-| `--elev-source` | `auto` | altitude du GPX si présente, sinon du MNT ; forcer `gpx` ou `dem` |
-| `--dplus-threshold` | 5 | seuil d'hystérésis du D+ (m) |
-| `--show-duration` / `--show-moving` | off | ajoute la durée totale / le temps en mouvement |
-| `--date` / `--no-date` | date du GPX | date personnalisée (texte libre) ou aucune |
-| `--profile-fill` / `--no-profile` | off | aire sous le profil (remplissage) / pas de profil |
-| `--corner-radius` / `--no-frame` | 4 | angles arrondis du contour de découpe / pas de contour |
-| `--font`, `--title-font` | auto | polices .ttf ou .otf |
-| `--no-preview` | off | ne génère pas l'aperçu PNG |
+| `--water-hatch` | 0 | optional hatch spacing inside lakes (mm); 0 = filled polygon only |
+| `--elev-source` | `auto` | GPX elevation when present, else DEM; force `gpx` or `dem` |
+| `--dplus-threshold` | 5 | hysteresis threshold for the ascent (m) |
+| `--profile-fill` / `--no-profile` | off | filled area under the profile / no profile |
+| `--corner-radius` / `--no-frame` | 4 | rounded corners of the cut outline / no outline |
+| `--font`, `--title-font` | auto | `.ttf` or `.otf` fonts |
+| `--no-preview` | off | skip the PNG preview |
 
-`gpx2engraving.bat --help` liste tout.
+`gpx2engraving.bat --help` lists everything.
 
-### Polices
+### Fonts
 
-Le script cherche dans l'ordre Funnel Display, Mulish, Bahnschrift, Segoe UI, Arial, DejaVu.
-Déposez vos `.ttf` dans un dossier `fonts/` à côté du script pour qu'ils soient pris en priorité,
-ou passez `--title-font` et `--font`.
+The script looks for Funnel Display, Mulish, Bahnschrift, Segoe UI, Arial and DejaVu, in that order.
+Drop your own `.ttf` files in the `fonts/` folder next to the script and they take priority,
+or pass `--title-font` and `--font`.
 
-## Dans LightBurn
+## In LightBurn
 
-Importer le SVG (les dimensions sont en mm, LightBurn les respecte). Une couleur = un calque,
-les couleurs sont celles de la palette LightBurn :
+Import the SVG. Dimensions are in millimetres and LightBurn keeps them. Each colour becomes a
+LightBurn layer; the colours are those of the LightBurn palette, so the mapping is direct:
 
-| Calque SVG | Couleur | Contenu | Mode conseillé |
+| SVG layer | Colour | Content | Suggested mode |
 |---|---|---|---|
-| `frame` | C02 rouge | contour de la planche, angles arrondis | découpe |
-| `contours` | C01 bleu | courbes de niveau | ligne, faible puissance |
-| `contours_index` | C09 bleu foncé | courbes maîtresses | ligne, puissance un peu plus forte |
-| `water` | C06 cyan | contour des lacs | ligne |
-| `water_hatch` | C14 bleu clair | hachures des lacs | ligne |
-| `track` | C00 noir | trace GPX (polygone) | remplissage |
-| `track_line` | C16 gris | axe de la trace (si `--track-style line` ou `both`) | ligne |
-| `profile` | C03 vert | courbe du profil, base, graduations | ligne |
-| `profile_fill` | C11 vert foncé | aire sous le profil (si `--profile-fill`) | remplissage |
-| `text` | C07 magenta | titre, statistiques, étiquettes | remplissage |
+| `frame` | C02 red | plate outline, rounded corners | **Cut** |
+| `contours` | C01 blue | contour lines | Line, low power |
+| `contours_index` | C09 dark blue | index contours (every 5th) | Line, a bit more power |
+| `water` | C06 cyan | lakes as closed polygons | **Fill** (engrave, then paint) |
+| `water_hatch` | C14 light blue | optional lake hatching (`--water-hatch`) | Line |
+| `track` | C00 black | GPX track as a polygon | **Fill** |
+| `track_line` | C16 grey | track centre line (`--track-style line` or `both`) | Line |
+| `profile` | C03 green | profile curve, baseline, ticks | Line |
+| `profile_fill` | C11 dark green | area under the profile (`--profile-fill`) | Fill |
+| `text` | C07 magenta | title, statistics, labels | **Fill** |
 
-Les épaisseurs de trait du SVG n'ont pas d'importance en mode ligne : c'est la largeur du faisceau qui compte.
-Pour une trace plus ou moins épaisse, jouer sur `--track-width`.
+Stroke widths in the SVG do not matter in Line mode: the beam width does. To get a thicker or thinner
+track, change `--track-width`. Contours are erased under the track (plus the halo) and inside lakes,
+so nothing is engraved twice.
 
-## Calcul du D+
+## How the ascent is computed
 
-L'altitude (GPX par défaut) est rééchantillonnée tous les 5 m, lissée sur 60 m (`--elev-smooth`),
-puis les montées sont cumulées avec un seuil d'hystérésis de 5 m (`--dplus-threshold`).
-Cela évite la surestimation du D+ GPS brut. Pour se caler sur une application donnée, ajuster le seuil
-(plus il est haut, plus le D+ baisse). `--elev-source dem` utilise l'altitude du MNT IGN à la place du GPX.
+The elevation (GPX by default) is resampled every 5 m, smoothed over 60 m (`--elev-smooth`), then
+climbs are summed with a 5 m hysteresis threshold (`--dplus-threshold`). This avoids the usual
+overestimation of raw GPS ascent. To match a given app, tune the threshold (higher threshold, lower ascent)
+or simply pass `--ascent`. `--elev-source dem` uses the IGN DEM instead of the GPX elevation.
 
-## Sources de données
+## Data sources
 
-- MNT : IGN Géoplateforme, WMS-Raster `ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES` (RGE ALTI 1 à 5 m).
-  `--dem-layer ELEVATION.ELEVATIONGRIDCOVERAGE` bascule sur la BD ALTI 25 m.
-- Plans d'eau : IGN Géoplateforme, WFS `BDTOPO_V3:plan_d_eau`, ou Overpass (OpenStreetMap, `natural=water`).
+- DEM: IGN Géoplateforme WMS-Raster, layer `ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES` (RGE ALTI 1 to 5 m).
+  `--dem-layer ELEVATION.ELEVATIONGRIDCOVERAGE` switches to the 25 m BD ALTI.
+- Water bodies: IGN Géoplateforme WFS `BDTOPO_V3:plan_d_eau`, or Overpass (OpenStreetMap `natural=water`).
 
-## Limites connues et pistes
+## Known limits and ideas
 
-- Hors France, seul `--water osm` fonctionne : le MNT reste à brancher sur une source mondiale (Copernicus GLO-30).
-- Les segments de courbe parfaitement rectilignes sont des zones planes du MNT (lacs, replats), pas un bug.
-- Pas de cours d'eau ni de sommets nommés pour l'instant (données disponibles dans la BD TOPO).
+- Outside France only `--water osm` works; the DEM still needs a worldwide source (Copernicus GLO-30).
+- Perfectly straight contour segments are flat areas of the DEM (lakes, plateaus), not a bug.
+- No streams or named summits yet (both available in the BD TOPO).
 
-## Licence
+## License
 
-MIT. Données IGN sous licence ouverte Etalab 2.0, données OpenStreetMap sous ODbL.
+MIT. IGN data under the Etalab 2.0 open licence, OpenStreetMap data under ODbL.

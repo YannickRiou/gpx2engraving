@@ -1,1 +1,1 @@
-Déposez ici vos polices .ttf/.otf (ex. FunnelDisplay-Bold.ttf, Mulish-Regular.ttf) : elles seront prises en priorité.
+Drop your .ttf/.otf fonts here (e.g. FunnelDisplay-Bold.ttf, Mulish-Regular.ttf): they take priority over system fonts.
