@@ -146,7 +146,8 @@ A sample track is provided in `examples/ayguelongue.gpx`.
 | `--smooth` | 1.2 | gaussian smoothing of the DEM (pixels) |
 | `--track-width` | 1.1 | engraved track width (mm) |
 | `--track-style` | `fill` | `fill` (filled polygon), `line` (centre line), `both` |
-| `--halo` | 0.45 | empty halo around the track (mm) |
+| `--halo` | 0.45 | empty halo between the track and the contours (mm) |
+| `--water-gap` | 0.6 | empty gap between the track and the lakes (mm) |
 | `--water` | `ign` | `ign`, `osm`, `none` |
 | `--water-hatch` | 0 | optional hatch spacing inside lakes (mm); 0 = filled polygon only |
 | `--elev-source` | `auto` | GPX elevation when present, else DEM; force `gpx` or `dem` |
@@ -184,7 +185,8 @@ LightBurn layer; the colours are those of the LightBurn palette, so the mapping 
 
 Stroke widths in the SVG do not matter in Line mode: the beam width does. To get a thicker or thinner
 track, change `--track-width`. Contours are erased under the track (plus the halo) and inside lakes,
-so nothing is engraved twice.
+and lakes are cut back around the track (`--water-gap`), so nothing is engraved twice and the two
+filled areas never merge.
 
 ## How the ascent is computed
 

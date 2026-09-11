@@ -897,7 +897,9 @@ def main():
     ap.add_argument("--track-width", type=float, default=1.1, help="engraved track width (mm)")
     ap.add_argument("--track-style", choices=["fill", "line", "both"], default="fill",
                     help="track as a filled polygon, as a centre line, or both")
-    ap.add_argument("--halo", type=float, default=0.45, help="empty halo around the track (mm); 0 = none")
+    ap.add_argument("--halo", type=float, default=0.45, help="empty halo between the track and the contours (mm); 0 = none")
+    ap.add_argument("--water-gap", type=float, default=0.6,
+                    help="empty gap between the track and water bodies (mm), so two filled areas never touch; 0 = none")
     ap.add_argument("--water", choices=["ign", "osm", "none"], default="ign", help="water bodies source")
     ap.add_argument("--water-hatch", type=float, default=0.0,
                     help="optional hatch spacing inside lakes (mm); 0 = filled polygon only (default)")
@@ -1044,6 +1046,17 @@ def main():
     if water_polys:
         wu = unary_union(water_polys)
         erase = wu if erase is None else unary_union([erase, wu])
+    # keep a gap between the track and the lakes: two filled areas must never touch
+    water_draw = water_polys
+    if water_polys and args.water_gap > 0:
+        gap_buf = track_union.buffer(half_w_m + lay.mm_to_m(args.water_gap), quad_segs=4)
+        min_area_m2 = args.water_min_area / (lay.scale ** 2)
+        water_draw = []
+        for p in water_polys:
+            q = p.difference(gap_buf)
+            parts = [r for r in iter_polys(q) if r.area >= min_area_m2 / 4]
+            if parts:
+                water_draw.append(unary_union(parts))
 
     # ---- contour lines ----
     zvis = dem[6:-6, 6:-6] if dem.shape[0] > 20 else dem
@@ -1072,7 +1085,7 @@ def main():
         svg.polyline("contours", line_mm(l))
     for lev, l in index:
         svg.polyline("contours_index", line_mm(l))
-    for p in water_polys:
+    for p in water_draw:
         for pp in iter_polys(p):
             svg.polygon("water", poly_mm(pp))
             if args.water_hatch > 0:
