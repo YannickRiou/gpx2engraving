@@ -152,26 +152,86 @@ def read_gpx(path):
 # ----------------------------------------------------------------------------
 # Track: projection, distance, elevation gain
 # ----------------------------------------------------------------------------
+def despike(x, y, ele, t, max_kmh):
+    """Drop points that would require an implausible speed from the last kept point (GPS jumps)."""
+    if len(x) < 3 or any(v is None for v in t):
+        return x, y, ele, t
+    keep = [0]
+    for i in range(1, len(x)):
+        j = keep[-1]
+        dtm = (t[i] - t[j]).total_seconds()
+        dd = math.hypot(x[i] - x[j], y[i] - y[j])
+        if dtm <= 0 or dd / dtm * 3.6 <= max_kmh:
+            keep.append(i)
+    idx = np.array(keep)
+    return x[idx], y[idx], ele[idx], [t[i] for i in idx]
+
+
+def smooth_xy(x, y, ele, t, smooth_m, step=2.0):
+    """Resample a segment every `step` m along its length, then gaussian-smooth x and y
+    (sigma = smooth_m). Elevation and time are interpolated onto the new points."""
+    from scipy.ndimage import gaussian_filter1d
+    d = np.concatenate([[0.0], np.cumsum(np.hypot(np.diff(x), np.diff(y)))])
+    if d[-1] < 3 * step:
+        return x, y, ele, t
+    u = np.concatenate([[True], np.diff(d) > 0])          # drop duplicate positions
+    d, x, y, ele = d[u], x[u], y[u], ele[u]
+    t = [v for v, k in zip(t, u) if k]
+    dd = np.arange(0.0, d[-1] + step / 2, step)
+    xi, yi = np.interp(dd, d, x), np.interp(dd, d, y)
+    ok = np.isfinite(ele)
+    ei = np.interp(dd, d[ok], ele[ok]) if ok.sum() >= 2 else np.full_like(dd, np.nan)
+    if all(v is not None for v in t):
+        ts = np.array([v.timestamp() for v in t])
+        ti = np.interp(dd, d, ts)
+        tt = [dt.datetime.fromtimestamp(v, t[0].tzinfo) for v in ti]
+    else:
+        tt = [None] * len(dd)
+    sigma = smooth_m / step
+    return gaussian_filter1d(xi, sigma, mode="nearest"), gaussian_filter1d(yi, sigma, mode="nearest"), ei, tt
+
+
 class Track:
-    def __init__(self, segs, epsg=2154):
+    def __init__(self, files, epsg=2154, smooth_m=0.0, despike_kmh=0.0):
+        """files: list of (name, segments). Files and segments are concatenated in order;
+        distance and duration do not accumulate across gaps (pauses, transfers between stages)."""
         tr = Transformer.from_crs(4326, epsg, always_xy=True)
         self.segments = []      # list of (n, 2) arrays in metres
+        self.stages = []        # (name, first_index, last_index_exclusive) per input file
         xs, ys, eles, times = [], [], [], []
-        for seg in segs:
-            lat = np.array([p[0] for p in seg])
-            lon = np.array([p[1] for p in seg])
-            x, y = tr.transform(lon, lat)
-            x, y = np.asarray(x), np.asarray(y)
-            self.segments.append(np.column_stack([x, y]))
-            xs.append(x)
-            ys.append(y)
-            eles.append(np.array([p[2] for p in seg], dtype=float))
-            times.extend([p[3] for p in seg])
+        n = 0
+        for name, segs in files:
+            s0 = n
+            for seg in segs:
+                lat = np.array([p[0] for p in seg])
+                lon = np.array([p[1] for p in seg])
+                x, y = tr.transform(lon, lat)
+                x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
+                ele = np.array([p[2] for p in seg], dtype=float)
+                t = [p[3] for p in seg]
+                if despike_kmh > 0:
+                    x, y, ele, t = despike(x, y, ele, t, despike_kmh)
+                if smooth_m > 0:
+                    x, y, ele, t = smooth_xy(x, y, ele, t, smooth_m)
+                if len(x) < 2:
+                    continue
+                self.segments.append(np.column_stack([x, y]))
+                xs.append(x)
+                ys.append(y)
+                eles.append(ele)
+                times.extend(t)
+                n += len(x)
+            if n > s0:
+                self.stages.append((name, s0, n))
+        if not self.segments:
+            raise SystemExit("No usable track points left.")
         self.x = np.concatenate(xs)
         self.y = np.concatenate(ys)
         self.ele = np.concatenate(eles)
         self.times = times
         d = np.hypot(np.diff(self.x), np.diff(self.y))
+        starts = np.cumsum([len(s) for s in self.segments])[:-1]   # first index of each new segment
+        d[starts - 1] = 0.0                                         # no distance across gaps
         self.dist = np.concatenate([[0.0], np.cumsum(d)])
         self.length = float(self.dist[-1])
 
@@ -179,15 +239,28 @@ class Track:
     def bbox(self):
         return float(self.x.min()), float(self.y.min()), float(self.x.max()), float(self.y.max())
 
+    def stage_bounds_dist(self):
+        """Cumulative distance at the start of each stage after the first."""
+        return [float(self.dist[s0]) for _, s0, _ in self.stages[1:]]
+
     def start_time(self):
         ts = [t for t in self.times if t is not None]
         return min(ts) if ts else None
 
-    def duration(self):
+    def end_time(self):
         ts = [t for t in self.times if t is not None]
-        if len(ts) < 2:
-            return None
-        return max(ts) - min(ts)
+        return max(ts) if ts else None
+
+    def duration(self):
+        """Sum of the elapsed time of each stage (a multi-day trip does not count the nights)."""
+        total = dt.timedelta(0)
+        found = False
+        for _, s0, s1 in self.stages:
+            ts = [t for t in self.times[s0:s1] if t is not None]
+            if len(ts) >= 2:
+                total += max(ts) - min(ts)
+                found = True
+        return total if found else None
 
     def moving_duration(self, speed_min_kmh=0.5):
         """Moving time: intervals slower than the threshold (pauses) are ignored."""
@@ -764,6 +837,23 @@ class Fmt:
     def date(self, t):
         return f"{t.day} {MONTHS[self.lang][t.month - 1]} {t.year}"
 
+    def date_range(self, t0, t1, dash="–"):
+        """Single date, or a range for multi-day trips: '2–4 August 2026', '2 au 4 août 2026'."""
+        if t1 is None or (t0.year, t0.month, t0.day) == (t1.year, t1.month, t1.day):
+            return self.date(t0)
+        m0, m1 = MONTHS[self.lang][t0.month - 1], MONTHS[self.lang][t1.month - 1]
+        if self.lang == "fr":
+            if (t0.year, t0.month) == (t1.year, t1.month):
+                return f"{t0.day} au {t1.day} {m0} {t0.year}"
+            if t0.year == t1.year:
+                return f"{t0.day} {m0} au {t1.day} {m1} {t0.year}"
+            return f"{self.date(t0)} au {self.date(t1)}"
+        if (t0.year, t0.month) == (t1.year, t1.month):
+            return f"{t0.day}{dash}{t1.day} {m0} {t0.year}"
+        if t0.year == t1.year:
+            return f"{t0.day} {m0} {dash} {t1.day} {m1} {t0.year}"
+        return f"{self.date(t0)} {dash} {self.date(t1)}"
+
     def duration(self, td):
         s = int(td.total_seconds())
         h, m = s // 3600, (s % 3600) // 60
@@ -779,9 +869,17 @@ class Fmt:
 def main():
     ap = argparse.ArgumentParser(description="GPX -> laser-ready SVG (LightBurn).",
                                  formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    ap.add_argument("gpx", help="GPX file")
-    ap.add_argument("--title", "-t", help="engraved title (default: track name from the GPX)")
-    ap.add_argument("--out", "-o", help="output SVG (default: next to the GPX)")
+    ap.add_argument("gpx", nargs="+", help="GPX file(s); several files are merged into one trip (e.g. one per day)")
+    ap.add_argument("--title", "-t", help="engraved title (default: track name from the first GPX)")
+    ap.add_argument("--out", "-o", help="output SVG (default: next to the first GPX)")
+    ap.add_argument("--keep-order", action="store_true",
+                    help="merge the GPX files in the order given instead of sorting them by start time")
+    ap.add_argument("--stage-marks", action="store_true",
+                    help="mark the boundary between merged GPX files on the elevation profile")
+    ap.add_argument("--track-smooth", type=float, default=0.0,
+                    help="smooth the track geometry with a gaussian of this sigma in metres (0 = off); ~15-30 for noisy GPS")
+    ap.add_argument("--despike", type=float, default=0.0,
+                    help="drop GPS points implying a speed above this value in km/h (0 = off); e.g. 12 for hiking")
     ap.add_argument("--lang", choices=sorted(STRINGS), default="en", help="language of the engraved text (date, units)")
     ap.add_argument("--max-size", type=float, default=200.0, help="maximum plate side in mm")
     ap.add_argument("--format", choices=["auto", "square", "portrait", "landscape"], default="auto",
@@ -839,13 +937,29 @@ def main():
     T_title, T_body = TextEngine(title_font), TextEngine(body_font)
     log(f"Fonts: title={os.path.basename(title_font)}  body={os.path.basename(body_font)}")
 
-    # ---- GPX ----
-    log(f"Reading GPX: {args.gpx}")
-    gpx_name, segs, meta_time = read_gpx(args.gpx)
-    track = Track(segs)
-    title = args.title or gpx_name or os.path.splitext(os.path.basename(args.gpx))[0]
+    # ---- GPX (one or several files) ----
+    files = []
+    for path in args.gpx:
+        log(f"Reading GPX: {path}")
+        gpx_name, segs, meta_time = read_gpx(path)
+        starts = [p[3] for s in segs for p in s if p[3] is not None]
+        t0 = min(starts) if starts else meta_time
+        files.append(dict(path=path, name=gpx_name or os.path.splitext(os.path.basename(path))[0],
+                          segs=segs, start=t0))
+    if len(files) > 1 and not args.keep_order and all(f["start"] for f in files):
+        files.sort(key=lambda f: f["start"])
+    meta_time = files[0]["start"]
+    track = Track([(f["name"], f["segs"]) for f in files],
+                  smooth_m=args.track_smooth, despike_kmh=args.despike)
+    title = args.title or files[0]["name"]
     n_pts = len(track.x)
-    log(f"  {n_pts} points, {len(segs)} segment(s), length {track.length / 1000:.2f} km")
+    n_segs = sum(len(f["segs"]) for f in files)
+    log(f"  {n_pts} points, {len(files)} file(s), {n_segs} segment(s), length {track.length / 1000:.2f} km"
+        + (f"  (smoothed sigma {args.track_smooth:g} m)" if args.track_smooth > 0 else "")
+        + (f"  (despiked > {args.despike:g} km/h)" if args.despike > 0 else ""))
+    if len(files) > 1:
+        for name, s0, s1 in track.stages:
+            log(f"  stage: {name}  {track.dist[s1 - 1] - track.dist[s0]:.0f} m")
 
     # ---- layout ----
     lay = Layout(track.bbox, args)
@@ -887,7 +1001,9 @@ def main():
         if args.date:
             stats.append(args.date)
         elif start:
-            stats.append(F.date(start.astimezone()))
+            end = track.end_time()
+            stats.append(F.date_range(start.astimezone(), end.astimezone() if end else None,
+                                      dash="–" if T_body.has("–") else "-"))
     sep = "  ·  " if T_body.has("·") else "   -   "
     stats_txt = sep.join(stats)
     log(f"Statistics: {stats_txt}")
@@ -922,7 +1038,7 @@ def main():
                     continue
                 water_polys.append(unary_union(parts).simplify(tol_m))
                 water_names.append(nm)
-            log(f"Water bodies ({args.water}): {len(water_polys)} kept " + ", ".join(water_names))
+            log(f"Water bodies ({args.water}): {len(water_polys)} kept: " + ", ".join(dict.fromkeys(water_names)))
         except Exception as e:
             log(f"  ! water bodies skipped: {e}")
     if water_polys:
@@ -1011,6 +1127,10 @@ def main():
         if args.profile_fill:
             svg.polygon("profile_fill", [list(curve_ls.coords) + [pxy(disp_length, zlo), pxy(0, zlo)]])
         svg.polyline("profile", [pxy(0, zlo), pxy(disp_length, zlo)])
+        if args.stage_marks:
+            for dm in track.stage_bounds_dist():
+                x = pxy(dm * k_len, zlo)[0]
+                svg.polyline("profile", [(x, gy0), (x, gy1)])
         # elevation ticks (left): bottom, top, and middle when there is room
         for z in {zlo, zhi} | ({(zlo + zhi) / 2} if gh > 12 else set()):
             x, y = pxy(0, z)
@@ -1037,7 +1157,7 @@ def main():
         svg.polyline("profile", [(x, y), (x, y + 0.9)])
         svg.path("text", T_body.path_d("0", lab, x, y + 0.9 + lab, "middle"))
 
-    out = args.out or os.path.splitext(args.gpx)[0] + ".svg"
+    out = args.out or os.path.splitext(files[0]["path"])[0] + ".svg"
     svg.write(out)
     log(f"SVG written: {out} ({os.path.getsize(out) / 1024:.0f} kB)")
     if not args.no_preview:
@@ -1046,12 +1166,15 @@ def main():
         log(f"Preview: {png}")
 
     # JSON summary on stdout (handy for batch runs)
-    summary = dict(title=title, gpx=os.path.abspath(args.gpx), svg=os.path.abspath(out),
+    summary = dict(title=title, gpx=[os.path.abspath(f["path"]) for f in files], svg=os.path.abspath(out),
+                   stages=[dict(name=nm, distance_m=round(float(track.dist[s1 - 1] - track.dist[s0])))
+                           for nm, s0, s1 in track.stages],
                    plate_mm=[lay.W, lay.H], scale=f"1:{1000 / lay.scale:.0f}",
                    distance_m=round(track.length), displayed_distance_m=round(disp_length),
                    ascent_m=round(gain), displayed_ascent_m=round(disp_gain), descent_m=round(loss),
                    ele_min=round(float(e_sm.min())),
                    ele_max=round(float(e_sm.max())), date=start.isoformat() if start else None,
+                   end_date=track.end_time().isoformat() if track.end_time() else None,
                    duration_s=int(track.duration().total_seconds()) if track.duration() else None,
                    contour_interval=interval, water=water_names, elevation_source=src_name)
     print(json.dumps(summary, ensure_ascii=False, indent=2))

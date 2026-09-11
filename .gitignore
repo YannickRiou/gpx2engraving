@@ -1,4 +1,5 @@
 cache/
+gpx/
 __pycache__/
 *.pyc
 fonts/*.ttf

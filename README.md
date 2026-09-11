@@ -14,7 +14,8 @@ The PNG preview shows the plate as it will look once engraved; the SVG itself us
 
 ## What it does
 
-1. Reads the GPX (tracks or routes, several segments allowed) and projects it to Lambert-93.
+1. Reads one or several GPX files (tracks or routes, several segments allowed), optionally smooths
+   and despikes them, and projects everything to Lambert-93.
 2. Computes distance, elevation gain (smoothed elevation plus a hysteresis threshold), date and duration.
 3. Picks the plate shape (square, portrait or landscape) as tight as possible around the track, 20 cm max by default.
 4. Downloads the IGN **RGE ALTI 5 m** digital elevation model over the extent (cached locally), smooths it
@@ -61,7 +62,8 @@ gpx2engraving.bat track.gpx --title "My hike"
 ```
 
 This writes `track.svg` and `track_preview.png` next to the GPX file and prints a JSON summary
-(plate size, scale, distance, ascent, elevations, lakes found).
+(plate size, scale, distance, ascent, elevations, lakes found, stages).
+A `gpx/` folder is ignored by git: drop your personal tracks there.
 
 Without `--title`, the track name stored in the GPX is used.
 
@@ -75,6 +77,35 @@ gpx2engraving.bat track.gpx --title "Pic de Cagire" --distance 12.4 --ascent 115
 ```
 
 `--distance` (km) also rescales the profile's distance axis so the labels stay consistent.
+
+### Multi-day trips: merging several GPX files
+
+Pass several files and they are merged into one plate. Files are sorted by start time
+(`--keep-order` to keep the command-line order), distance and duration are summed stage by stage
+without counting the gaps between them (nights, transfers), and the date becomes a range such as
+"2–4 August 2026". `--stage-marks` draws a thin vertical line on the profile at each stage boundary.
+
+```bat
+gpx2engraving.bat day1.gpx day2.gpx day3.gpx --title "GR10, stage 3 to 5" --stage-marks
+```
+
+### Noisy tracks: smoothing and despiking
+
+A cycling computer or a phone in a backpack produces a jittery track that engraves badly and
+inflates the distance (often by 10 to 20 %). Two independent filters fix that:
+
+- `--track-smooth SIGMA` resamples each segment every 2 m and applies a gaussian filter of
+  `SIGMA` metres to the geometry. 5 to 10 m removes GPS jitter while keeping switchbacks;
+  above 20 m the corners start to get cut.
+- `--despike KMH` drops points that would require a speed above `KMH` km/h from the previous
+  kept point, which removes isolated GPS jumps. 10 to 12 is a good value for hiking.
+
+```bat
+gpx2engraving.bat joclar.gpx --title "Étang de Joclar" --track-smooth 8 --despike 10
+```
+
+Distance and ascent are computed on the filtered track, so the displayed distance goes down when
+the noise goes away. Use `--distance` to force the value from your watch if you prefer.
 
 ### More examples
 
@@ -105,6 +136,9 @@ A sample track is provided in `examples/ayguelongue.gpx`.
 | `--max-size` | 200 | maximum plate side (mm) |
 | `--margin` | 250 | minimum terrain margin around the track (m) |
 | `--distance`, `--ascent`, `--date`, `--duration` | from GPX | force the displayed values |
+| `--keep-order` / `--stage-marks` | off | merging: keep file order / mark stage boundaries on the profile |
+| `--track-smooth` | 0 | gaussian smoothing of the track geometry, sigma in metres (5-10 for noisy GPS) |
+| `--despike` | 0 | drop GPS points implying a speed above this value (km/h) |
 | `--show-duration` / `--show-moving` | off | add total duration / moving time |
 | `--no-date` | off | no date |
 | `--interval` | auto | contour interval (m); auto aims at `--target-lines` levels (40) |
